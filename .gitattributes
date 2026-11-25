@@ -1,0 +1,11 @@
+# Normalize text files to LF
+* text=auto eol=lf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.npz binary
+*.npy binary
+*.onnx binary
+*.zip binary
