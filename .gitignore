@@ -8,7 +8,8 @@ __pycache__/
 # Downloaded or newly captured checkerboard photos
 /calibration/rgb_1280x720/*
 !/calibration/rgb_1280x720/README.md
-/calibration/rgb_1280x720.old/
+/calibration/camera_imu/*
+!/calibration/camera_imu/README.md
 
 # Development tools
 .pytest_cache/

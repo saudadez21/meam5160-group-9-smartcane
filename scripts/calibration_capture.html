@@ -16,7 +16,16 @@
   .panels { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 20px; align-items: start; }
   .camera { position: relative; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 10px; background: #202932; }
   .camera img { display: block; width: 100%; }
-  .camera:has(img[src])::after { content: ''; position: absolute; inset: 0; pointer-events: none; background-image: linear-gradient(to right, transparent calc(100% - 1px), #ffffff40 0), linear-gradient(to bottom, transparent calc(100% - 1px), #ffffff40 0); background-size: 12.5% 20%; }
+  .camera:has(img[src])::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image: linear-gradient(to right, transparent calc(100% - 1px), #ffffff40 0),
+                      linear-gradient(to bottom, transparent calc(100% - 1px), #ffffff40 0);
+    background-size: 12.5% 20%;
+  }
+  .camera.camera--pose::after { content: none; }
   .camera p { position: absolute; inset: 0; display: grid; place-content: center; }
   .camera p[hidden] { display: none; }
   .toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 14px; }
@@ -36,15 +45,15 @@
 </head>
 <body>
 <main>
-  <h1>Camera calibration capture</h1>
+  <h1 id="title">Camera calibration capture</h1>
   <div class="panels">
     <section aria-label="Camera preview">
-      <div class="camera">
+      <div id="camera" class="camera">
         <img id="preview" alt="Live camera preview with detected checkerboard corners">
-        <p id="waiting">Waiting for camera…</p>
+        <p id="waiting">Waiting for camera...</p>
       </div>
       <div class="toolbar">
-        <button id="save" type="button" disabled>Save photo <kbd>S</kbd></button>
+        <button id="save" type="button" disabled><span id="save-label">Save photo</span> <kbd>S</kbd></button>
         <p id="status">Waiting for a frame</p>
       </div>
       <p id="feedback" class="muted" role="status"></p>
@@ -53,7 +62,7 @@
       <h2 id="coverage-title">Checkerboard coverage</h2>
       <p id="summary">0 photos saved</p>
       <div id="grid" class="grid" aria-label="Saved photos per image cell"></div>
-      <p class="muted">Each number counts saved photos with at least one corner in that cell. <span class="legend">Yellow outlines</span> show the current corners. Aim for cells marked 0, and vary the board's tilt and distance.</p>
+      <p id="coverage-help" class="muted">Each number counts saved photos with at least one corner in that cell. <span class="legend">Yellow outlines</span> show the current corners. Aim for cells marked 0, and vary the board's tilt and distance.</p>
     </section>
   </div>
 </main>
@@ -65,10 +74,24 @@
   const summary = document.getElementById('summary');
   const grid = document.getElementById('grid');
   const feedback = document.getElementById('feedback');
+  const pitchBins = ['pitch below 25 deg', 'pitch 25-40 deg', 'pitch above 40 deg'];
+  const rollBins = ['roll below -8 deg', 'roll -8 to 8 deg', 'roll above 8 deg'];
   let frame = null;
   let imageURL = null;
   let interval = 1000;
   let saving = false;
+  let jointMode = false;
+
+  function showJointMode() {
+    jointMode = true;
+    document.title = 'Camera and IMU calibration';
+    document.getElementById('title').textContent = document.title;
+    document.getElementById('camera').classList.add('camera--pose');
+    document.getElementById('save-label').textContent = 'Save pose';
+    document.getElementById('coverage-title').textContent = 'Pose coverage';
+    document.getElementById('coverage-help').textContent = 'Rows run from shallow to steep pitch. Columns show negative, near-zero, and positive roll. Keep the board flat, keep the cane tip on the same floor, and hold still for each capture.';
+    grid.setAttribute('aria-label', 'Saved poses per pitch and roll range');
+  }
 
   function drawCoverage(state) {
     grid.style.gridTemplateColumns = `repeat(${state.cols}, 1fr)`;
@@ -76,7 +99,9 @@
     const max = Math.max(1, ...state.counts);
     const count = state.counts.filter(value => value > 0).length;
     const photos = state.saved === 1 ? 'photo' : 'photos';
-    summary.textContent = `${state.saved} ${photos} saved · ${count}/${state.counts.length} cells covered`;
+    summary.textContent = jointMode
+      ? `${state.saved} poses saved | minimum ${state.minimum_pairs} | diversity ${state.diversity} / ${state.minimum_diversity}`
+      : `${state.saved} ${photos} saved | ${count}/${state.counts.length} cells covered`;
     const cells = state.counts.map((value, i) => {
       const cell = document.createElement('div');
       cell.className = 'cell';
@@ -84,14 +109,18 @@
       cell.classList.toggle('active', active.has(i));
       cell.style.setProperty('--shade', `${24 + Math.round(16 * value / max)}%`);
       cell.textContent = value;
-      cell.title = `Row ${Math.floor(i / state.cols) + 1}, column ${i % state.cols + 1}`;
+      const row = Math.floor(i / state.cols);
+      const col = i % state.cols;
+      cell.title = jointMode ? `${pitchBins[row]}, ${rollBins[col]}` : `Row ${row + 1}, column ${col + 1}`;
+      cell.setAttribute('aria-label', `${cell.title}, ${value} saved`);
       return cell;
     });
     grid.replaceChildren(...cells);
   }
 
   function updateButton() {
-    save.disabled = saving || !frame?.active.length || Boolean(frame.saved_as);
+    const ready = jointMode ? frame?.can_save : frame?.active.length;
+    save.disabled = saving || !ready || Boolean(frame?.saved_as);
   }
 
   async function poll() {
@@ -99,6 +128,7 @@
       const response = await fetch('status');
       if (!response.ok) throw new Error();
       const state = await response.json();
+      if (state.mode === 'camera_imu' && !jointMode) showJointMode();
       interval = state.interval_ms;
       if (state.sequence !== null && state.sequence !== frame?.sequence) {
         const image = await fetch(`preview/${state.sequence}`);
@@ -110,13 +140,15 @@
         waiting.hidden = true;
       }
       frame = state;
-      if (state.sequence !== null) {
+      if (jointMode) {
+        status.textContent = state.message;
+      } else if (state.sequence !== null) {
         status.textContent = state.active.length ? 'Checkerboard detected' : 'Show the whole checkerboard';
       }
       drawCoverage(state);
     } catch {
       frame = null;
-      status.textContent = 'Preview interrupted. Reconnecting…';
+      status.textContent = 'Preview interrupted. Reconnecting...';
     } finally {
       updateButton();
       setTimeout(poll, interval);
