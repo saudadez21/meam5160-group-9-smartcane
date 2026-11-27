@@ -30,12 +30,36 @@ the host monotonic clock when reading a frame completes.
 
 ## Sensor orientation and live preview
 
-With the sensor mounted on this cane, face the sensor from in front of the
-cane. Raw rows run from bottom to top and raw columns run from right to left.
-The live panel reverses both axes so it matches that view. The driver returns
-arrays in the original sensor order.
+On this cane, raw row indices increase upward and raw column indices increase
+to the left in the camera view. The live grid and projection reverse both
+axes to match the image. The driver returns arrays in the original sensor
+order.
 
-Add `--view 8080 --tof` to either live BEV command to show the ToF panel.
-Use `--tof-bus` if the sensor is on a different I2C device. Run one ranging
-process per sensor. The panel displays the latest ToF frame independently of
-the bird's-eye view.
+Add `--view 8080 --tof` to a live BEV command to show the ToF grid.
+
+## Camera alignment preview
+
+Run the standalone preview from the repository root and open the printed URL.
+
+```sh
+uv run --locked python scripts/preview_tof_camera.py --camera /dev/video0 --port 8080
+```
+
+This preview uses the RGB camera, camera intrinsics, and ToF readings. Filled
+cyan points mark valid returns and amber rings mark tentative returns. Labels
+are in millimeters. Use `--tof-bus` for a different I2C device and run one
+ranging process per sensor.
+
+The overlay uses the ToF frame closest to the camera frame's host timestamp,
+within 150 ms. It treats each range as axial depth and assumes parallel
+optical axes with the ToF center 3.5 cm to the right of the camera.
+
+For projection, the nominal `45 x 45` degree detection volume is divided
+into an `8 x 8` grid on the normalized image plane. Each marker represents
+the modeled center of a zone. At 20 cm axial depth, a nominal zone spans
+about 2.1 cm on each side. The actual detection volume depends on the target,
+lighting, and sensor settings.
+[VL53L8CX datasheet, section 2.2](https://www.st.com/resource/en/datasheet/vl53l8cx.pdf)
+
+Enable **Show zone outlines** to project each zone's four corners at its
+reported depth. Turn it off to return to the center-point view.

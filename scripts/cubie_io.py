@@ -8,8 +8,6 @@ from threading import Condition, Event, Thread
 import cv2
 from calibration_common import IMAGE_SIZE
 
-from smartcane.sensors.bno085 import Bno085Stream
-
 DEVICE = 1 if sys.platform == "win32" else 0
 FPS = 25
 PIXEL_FORMAT = "MJPG"
@@ -122,4 +120,6 @@ def add_imu_args(parser):
 
 
 def imu_stream(args):
+    from smartcane.sensors.bno085 import Bno085Stream
+
     return Bno085Stream(args.spi_device, args.int_line, args.rst_line, args.wake_line)

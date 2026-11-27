@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SmartCane ToF alignment</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #11171d; color: #edf1f5; }
+  body { margin: 0; }
+  main { max-width: 800px; margin: auto; padding: clamp(12px, 4vw, 32px); }
+  h1 { margin: 0 0 12px; font-size: clamp(22px, 4vw, 30px); }
+  .image { aspect-ratio: 16 / 9; background: #202932; border-radius: 8px; overflow: hidden; }
+  canvas { display: block; width: 100%; height: auto; }
+  .option { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+  .muted { color: #b8c3ce; font-size: 14px; }
+  .valid { color: #4ef0ff; }
+  .tentative { color: #ffbe28; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Camera and ToF alignment</h1>
+  <label class="option"><input id="show-outlines" type="checkbox" autocomplete="off"> Show zone outlines</label>
+  <div class="image">
+    <canvas id="preview" width="640" height="360" role="img"
+      aria-label="RGB camera view with projected ToF points"></canvas>
+  </div>
+  <p id="status" role="status">Waiting for the first frame...</p>
+  <p class="muted"><span class="valid">Filled cyan&nbsp; Valid</span> &nbsp;|&nbsp;
+    <span class="tentative">Amber ring&nbsp; Tentative</span> &nbsp;|&nbsp; Depth in mm</p>
+</main>
+<script>
+  const preview = document.getElementById('preview');
+  const status = document.getElementById('status');
+  const showOutlines = document.getElementById('show-outlines');
+  const drawing = preview.getContext('2d');
+  let sequence = null;
+  let image = null;
+  let outlines = [];
+
+  function drawPreview() {
+    if (!image) return;
+    drawing.drawImage(image, 0, 0);
+    if (!showOutlines.checked) return;
+    drawing.lineWidth = 1;
+    drawing.strokeStyle = 'rgba(224, 243, 250, 0.6)';
+    for (const corners of outlines) {
+      drawing.beginPath();
+      drawing.moveTo(...corners[0]);
+      for (const corner of corners.slice(1)) drawing.lineTo(...corner);
+      drawing.closePath();
+      drawing.stroke();
+    }
+  }
+
+  showOutlines.addEventListener('change', drawPreview);
+
+  async function refresh() {
+    let interval = 1000;
+    try {
+      const reply = await fetch('status');
+      if (!reply.ok) throw new Error();
+      const state = await reply.json();
+      interval = state.interval_ms;
+      if (state.sequence !== null && state.sequence !== sequence) {
+        const frame = await fetch(`preview/${state.sequence}`);
+        if (!frame.ok) throw new Error();
+        const nextImage = await createImageBitmap(await frame.blob());
+        if (image) image.close();
+        image = nextImage;
+        outlines = state.outlines;
+        sequence = state.sequence;
+        drawPreview();
+      }
+      if (state.tof.state === 'error') {
+        status.textContent = `ToF unavailable. ${state.tof.message}`;
+      } else if (state.points == null) {
+        status.textContent = 'Waiting for a ToF frame near the camera timestamp...';
+      } else {
+        status.textContent = `${state.points} projected points | Host timestamp gap ${state.tof_gap_ms.toFixed(1)} ms`;
+      }
+    } catch {
+      sequence = null;
+      status.textContent = 'Preview interrupted. Reconnecting...';
+    }
+    setTimeout(refresh, interval);
+  }
+  refresh();
+</script>
+</body>
+</html>
