@@ -8,4 +8,7 @@
 *.npz binary
 *.npy binary
 *.onnx binary
+*.pdmodel binary
+*.pdiparams binary
+*.pdiparams.info binary
 *.zip binary
