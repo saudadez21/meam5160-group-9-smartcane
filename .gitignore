@@ -5,6 +5,11 @@
 __pycache__/
 *.py[cod]
 
+# Downloaded or newly captured checkerboard photos
+/calibration/rgb_1280x720/*
+!/calibration/rgb_1280x720/README.md
+/calibration/rgb_1280x720.old/
+
 # Development tools
 .pytest_cache/
 .ruff_cache/

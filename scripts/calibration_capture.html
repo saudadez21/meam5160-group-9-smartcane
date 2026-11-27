@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Camera calibration capture</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { color-scheme: dark; font-family: system-ui, sans-serif; color: #edf1f5; background: #11171d; }
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  main { max-width: 1160px; margin: auto; padding: clamp(16px, 4vw, 36px); }
+  h1 { margin: 0 0 16px; font-size: clamp(24px, 4vw, 34px); }
+  h2 { margin: 0 0 8px; font-size: 19px; }
+  p { margin: 0; line-height: 1.45; }
+  .panels { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 20px; align-items: start; }
+  .camera { position: relative; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 10px; background: #202932; }
+  .camera img { display: block; width: 100%; }
+  .camera:has(img[src])::after { content: ''; position: absolute; inset: 0; pointer-events: none; background-image: linear-gradient(to right, transparent calc(100% - 1px), #ffffff40 0), linear-gradient(to bottom, transparent calc(100% - 1px), #ffffff40 0); background-size: 12.5% 20%; }
+  .camera p { position: absolute; inset: 0; display: grid; place-content: center; }
+  .camera p[hidden] { display: none; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 14px; }
+  button { font: inherit; font-weight: 680; color: #12231f; background: #85e2bf; border: 0; border-radius: 7px; padding: 11px 15px; cursor: pointer; }
+  button:disabled { background: #283641; color: #b7c3ce; cursor: default; }
+  button:focus-visible { outline: 2px solid white; outline-offset: 3px; }
+  kbd { font: inherit; margin-left: 8px; opacity: .72; }
+  #feedback { min-height: 1.5em; margin-top: 8px; }
+  .muted { color: #b2bec9; font-size: 14px; }
+  .grid { display: grid; aspect-ratio: 16 / 9; gap: 4px; margin: 12px 0; }
+  .cell { font-variant-numeric: tabular-nums; display: grid; place-content: center; background: #222c35; color: #aab8c5; border: 2px solid transparent; border-radius: 4px; }
+  .cell.hit { background: hsl(157 37% var(--shade)); color: #fff; }
+  .cell.active { border-color: #ffda81; }
+  .legend { color: #ffda81; }
+  @media (max-width: 740px) { .panels { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Camera calibration capture</h1>
+  <div class="panels">
+    <section aria-label="Camera preview">
+      <div class="camera">
+        <img id="preview" alt="Live camera preview with detected checkerboard corners">
+        <p id="waiting">Waiting for camera…</p>
+      </div>
+      <div class="toolbar">
+        <button id="save" type="button" disabled>Save photo <kbd>S</kbd></button>
+        <p id="status">Waiting for a frame</p>
+      </div>
+      <p id="feedback" class="muted" role="status"></p>
+    </section>
+    <section aria-labelledby="coverage-title">
+      <h2 id="coverage-title">Checkerboard coverage</h2>
+      <p id="summary">0 photos saved</p>
+      <div id="grid" class="grid" aria-label="Saved photos per image cell"></div>
+      <p class="muted">Each number counts saved photos with at least one corner in that cell. <span class="legend">Yellow outlines</span> show the current corners. Aim for cells marked 0, and vary the board's tilt and distance.</p>
+    </section>
+  </div>
+</main>
+<script>
+  const preview = document.getElementById('preview');
+  const waiting = document.getElementById('waiting');
+  const save = document.getElementById('save');
+  const status = document.getElementById('status');
+  const summary = document.getElementById('summary');
+  const grid = document.getElementById('grid');
+  const feedback = document.getElementById('feedback');
+  let frame = null;
+  let imageURL = null;
+  let interval = 1000;
+  let saving = false;
+
+  function drawCoverage(state) {
+    grid.style.gridTemplateColumns = `repeat(${state.cols}, 1fr)`;
+    const active = new Set(frame?.active);
+    const max = Math.max(1, ...state.counts);
+    const count = state.counts.filter(value => value > 0).length;
+    const photos = state.saved === 1 ? 'photo' : 'photos';
+    summary.textContent = `${state.saved} ${photos} saved · ${count}/${state.counts.length} cells covered`;
+    const cells = state.counts.map((value, i) => {
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      cell.classList.toggle('hit', value > 0);
+      cell.classList.toggle('active', active.has(i));
+      cell.style.setProperty('--shade', `${24 + Math.round(16 * value / max)}%`);
+      cell.textContent = value;
+      cell.title = `Row ${Math.floor(i / state.cols) + 1}, column ${i % state.cols + 1}`;
+      return cell;
+    });
+    grid.replaceChildren(...cells);
+  }
+
+  function updateButton() {
+    save.disabled = saving || !frame?.active.length || Boolean(frame.saved_as);
+  }
+
+  async function poll() {
+    try {
+      const response = await fetch('status');
+      if (!response.ok) throw new Error();
+      const state = await response.json();
+      interval = state.interval_ms;
+      if (state.sequence !== null && state.sequence !== frame?.sequence) {
+        const image = await fetch(`preview/${state.sequence}`);
+        if (!image.ok) throw new Error();
+        const nextURL = URL.createObjectURL(await image.blob());
+        preview.src = nextURL;
+        if (imageURL) URL.revokeObjectURL(imageURL);
+        imageURL = nextURL;
+        waiting.hidden = true;
+      }
+      frame = state;
+      if (state.sequence !== null) {
+        status.textContent = state.active.length ? 'Checkerboard detected' : 'Show the whole checkerboard';
+      }
+      drawCoverage(state);
+    } catch {
+      frame = null;
+      status.textContent = 'Preview interrupted. Reconnecting…';
+    } finally {
+      updateButton();
+      setTimeout(poll, interval);
+    }
+  }
+
+  async function savePhoto() {
+    if (save.disabled) return;
+    saving = true;
+    const sequence = frame.sequence;
+    updateButton();
+    try {
+      const response = await fetch('save', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({sequence}),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error);
+      if (frame?.sequence === sequence) frame.saved_as = result.name;
+      drawCoverage(result.state);
+      feedback.textContent = `Saved ${result.name}`;
+    } catch (error) {
+      feedback.textContent = error.message || 'Unable to save the photo.';
+    } finally {
+      saving = false;
+      updateButton();
+    }
+  }
+
+  save.addEventListener('click', savePhoto);
+  document.addEventListener('keydown', event => {
+    if (event.key.toLowerCase() === 's' && !event.repeat && !event.ctrlKey && !event.metaKey) savePhoto();
+  });
+  poll();
+</script>
+</body>
+</html>
