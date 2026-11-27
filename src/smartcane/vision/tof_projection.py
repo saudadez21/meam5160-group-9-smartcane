@@ -16,16 +16,13 @@ def camera_order(zones):
     return zones[::-1, ::-1]
 
 
-def project_tof(frame, matrix, distortion):
-    """Return raw camera pixels for zone centers and corners, plus readings."""
+def tof_camera_points(frame):
+    """Return each valid zone's center and corners in camera coordinates."""
     depth = camera_order(frame.distance_mm)
     tentative = camera_order(frame.tentative_mask)
     usable = camera_order(frame.valid_mask) | tentative
     rows, columns = np.nonzero(usable)
     distances = depth[usable]
-    if distances.size == 0:
-        return np.empty((0, 5, 2)), distances, tentative[usable]
-
     # Intersect the nominal zone rays with the plane at each axial depth.
     ray_step = np.tan(np.radians(TOF_FOV_DEG / 2)) / 4
     centers = np.column_stack((columns, rows)) - 3.5
@@ -35,9 +32,23 @@ def project_tof(frame, matrix, distortion):
     points[..., :2] = rays * z[..., None]
     points[..., 0] += TOF_RIGHT_OFFSET_M
     points[..., 2] = z
+    return points, distances, tentative[usable]
+
+
+def project_tof(frame, matrix, distortion):
+    """Return raw camera pixels for zone centers and corners, plus readings."""
+    points, distances, tentative = tof_camera_points(frame)
+    if distances.size == 0:
+        return np.empty((0, 5, 2)), distances, tentative
     zero = np.zeros(3)
     pixels = cv2.projectPoints(points.reshape(-1, 3), zero, zero, matrix, distortion)[0]
-    return pixels.reshape(-1, 5, 2), distances, tentative[usable]
+    return pixels.reshape(-1, 5, 2), distances, tentative
+
+
+def tof_ground_points(frame, pose):
+    """Return zone centers in ground coordinates, with signed height in z."""
+    points, _, tentative = tof_camera_points(frame)
+    return pose.camera_to_ground(points[:, 0]), tentative
 
 
 def draw_tof_points(image, frame, matrix, distortion, raw_size):

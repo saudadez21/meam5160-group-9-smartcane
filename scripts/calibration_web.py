@@ -33,10 +33,11 @@ def encode_preview(raw, corners):
     return encoded.tobytes()
 
 
-def add_web_args(parser):
-    parser.add_argument(
-        "--camera", default=str(DEVICE), help="camera index or Linux device path"
-    )
+def add_web_args(parser, *, camera=True):
+    if camera:
+        parser.add_argument(
+            "--camera", default=str(DEVICE), help="camera index or Linux device path"
+        )
     parser.add_argument("--host", default="0.0.0.0", help="IPv4 address to listen on")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument(

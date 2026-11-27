@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SmartCane ToF ground projection</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #11171d; color: #edf1f5; }
+  body { margin: 0; }
+  main { max-width: 460px; margin: auto; padding: clamp(12px, 4vw, 28px); }
+  h1 { margin: 0 0 4px; font-size: clamp(22px, 4vw, 30px); }
+  p { margin: 8px 0; }
+  .muted { color: #b8c3ce; font-size: 14px; }
+  .image { aspect-ratio: 400 / 440; background: #1d1813; border-radius: 8px; overflow: hidden; }
+  img { display: block; width: 100%; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+  .ground { color: #61cfae; }
+  .above { color: #ff896d; }
+  .below { color: #6ea7ff; }
+  .tentative { color: #f4b848; }
+</style>
+</head>
+<body>
+<main>
+  <h1>ToF ground projection</h1>
+  <p class="muted">Cane tip on the floor. Forward is up.</p>
+  <div class="image"><img id="preview" alt="Bird's-eye view of ToF measurements"></div>
+  <p id="status" role="status">Waiting for the first frame...</p>
+  <p id="metrics" class="muted"></p>
+  <div class="legend muted">
+    <span class="ground">Near floor</span><span class="above">Above floor</span>
+    <span class="below">Below floor</span><span class="tentative">Tentative return</span>
+  </div>
+</main>
+<script>
+  const preview = document.getElementById('preview');
+  const status = document.getElementById('status');
+  const metrics = document.getElementById('metrics');
+  let sequence = null;
+
+  async function refresh() {
+    let interval = 1000;
+    try {
+      const reply = await fetch('status');
+      if (!reply.ok) throw new Error();
+      const state = await reply.json();
+      interval = state.interval_ms;
+      if (state.sequence !== null && state.sequence !== sequence) {
+        preview.src = `preview/${state.sequence}`;
+        sequence = state.sequence;
+      }
+      if (state.message || state.sequence === null) {
+        status.textContent = state.message || 'Waiting for the first frame...';
+        metrics.textContent = '';
+      } else {
+        const heights = state.reliable_heights_cm;
+        const range = heights.length ? `${Math.min(...heights)} to ${Math.max(...heights)} cm` : '-';
+        status.textContent = `Ground ${state.ground} | Above ${state.above} | Below ${state.below} | Tentative ${state.tentative}`;
+        metrics.textContent = `Height range ${range} | Ground band +/-${state.band_cm} cm | ` +
+          `Camera height ${state.camera_height_m.toFixed(2)} m | Pitch ${state.pitch_deg.toFixed(1)} deg | Outside grid ${state.outside}`;
+      }
+    } catch {
+      sequence = null;
+      status.textContent = 'Preview interrupted. Reconnecting...';
+      metrics.textContent = '';
+    }
+    setTimeout(refresh, interval);
+  }
+  refresh();
+</script>
+</body>
+</html>

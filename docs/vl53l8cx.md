@@ -63,3 +63,22 @@ lighting, and sensor settings.
 
 Enable **Show zone outlines** to project each zone's four corners at its
 reported depth. Turn it off to return to the center-point view.
+
+## Ground projection preview
+
+Place the cane tip on a flat floor and aim the sensors toward the floor.
+Run from the repository root and open the printed URL.
+
+```sh
+uv run --locked --extra imu python scripts/preview_tof_ground.py --port 8080
+```
+
+The preview uses ToF and IMU readings with the saved camera-IMU mount
+calibration. It uses the same metric bounds as the live BEV. The height range
+includes reliable returns inside the grid. The floor band defaults to 5 cm
+above and below the reference plane and can be adjusted with
+`--ground-band-cm`.
+
+Start with a flat floor to check the height range. Keep the cane tip in the
+same place while adding and removing an object. For a drop test, use a
+known lower surface and compare its measured height with the floor baseline.
