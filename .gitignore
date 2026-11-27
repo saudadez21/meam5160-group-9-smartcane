@@ -14,6 +14,10 @@ __pycache__/
 # Local A733 VIPLite SDK
 /third_party/viplite/
 
+# Local VL53L8CX SDK and Linux driver build
+/third_party/vl53l8cx/
+/src/smartcane/sensors/vl53l8cx/native/build/
+
 # Development tools
 .pytest_cache/
 .ruff_cache/

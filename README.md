@@ -6,6 +6,8 @@ See the [camera calibration dataset guide](calibration/rgb_1280x720/README.md) t
 
 Use the [camera–IMU calibration guide](calibration/camera_imu/README.md) to measure the mounted camera and IMU together on the Cubie.
 
+See the [VL53L8CX ranging guide](docs/vl53l8cx.md) to build the ToF driver, read distance frames, and enable the live panel with `--tof`.
+
 ## Live CPU segmentation and BEV
 
 On the Cubie, run from the repository root:

@@ -1,16 +1,17 @@
 """Check live frame pairing and the camera-relative ground projection."""
 
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import numpy as np
-from cane_live import process_frame
+from cane_live import LivePreview, ToFPreview, process_frame
 
 from smartcane.sensors.bno085 import (
     FrameOrientation,
     ImuSample,
     interpolate_orientation,
 )
+from smartcane.sensors.vl53l8cx import ToFFrame
 from smartcane.vision.bev import UNKNOWN, GroundGrid, GroundPose, MountCalibration
 from smartcane.vision.segmentation_common import MODEL_SIZE, preprocess
 
@@ -35,6 +36,36 @@ class FramePairingTest(unittest.TestCase):
             interpolate_orientation(samples, 90_000_000)
         with self.assertRaisesRegex(ValueError, "gap"):
             interpolate_orientation(samples, 40_000_000)
+
+
+class ToFPreviewTest(unittest.TestCase):
+    def test_sensor_facing_view_preserves_the_raw_frame(self):
+        distance = np.zeros((8, 8), dtype=np.int16)
+        status = np.zeros((8, 8), dtype=np.uint8)
+        count = np.ones((8, 8), dtype=np.uint8)
+        distance[7, 7], status[7, 7] = 400, 5
+        distance[0, 0], status[0, 0] = 230, 6
+        distance[4, 5], status[4, 5] = 650, 1
+        frame = ToFFrame(distance, status, count, timestamp_ns=1, streamcount=0)
+        tof = ToFPreview("/dev/i2c-7")
+        tof.frame = frame
+        with patch("cane_live.time.monotonic_ns", return_value=2):
+            preview = LivePreview(tof).status()
+        self.assertIsNone(preview["sequence"])
+        self.assertEqual(preview["tof"]["distances_mm"][0][0], 400)
+        self.assertEqual(preview["tof"]["distances_mm"][7][7], 230)
+        self.assertIsNone(preview["tof"]["distances_mm"][3][2])
+        self.assertFalse(preview["tof"]["tentative"][0][0])
+        self.assertTrue(preview["tof"]["tentative"][7][7])
+        self.assertEqual(frame.distance_mm[0, 0], 230)
+        self.assertEqual(frame.target_status[7, 7], 5)
+
+    def test_stale_frames_are_hidden(self):
+        tof = ToFPreview("/dev/i2c-7")
+        self.assertEqual(tof.status(), {"state": "waiting"})
+        tof.frame = Mock(timestamp_ns=0)
+        with patch("cane_live.time.monotonic_ns", return_value=1_000_000_001):
+            self.assertEqual(tof.status(), {"state": "stale"})
 
 
 class LiveProjectionTest(unittest.TestCase):
