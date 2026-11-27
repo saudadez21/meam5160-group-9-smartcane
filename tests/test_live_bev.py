@@ -4,7 +4,8 @@ import unittest
 from unittest.mock import Mock, patch
 
 import numpy as np
-from cane_live import LivePreview, ToFPreview, process_frame
+from cane_live import process_frame
+from live_preview import LivePreview, ToFPreview
 
 from smartcane.sensors.bno085 import (
     FrameOrientation,
@@ -14,6 +15,7 @@ from smartcane.sensors.bno085 import (
 from smartcane.sensors.vl53l8cx import ToFFrame
 from smartcane.vision.bev import UNKNOWN, GroundGrid, GroundPose, MountCalibration
 from smartcane.vision.segmentation_common import MODEL_SIZE, preprocess
+from smartcane.vision.tof_projection import project_tof
 
 
 class FramePairingTest(unittest.TestCase):
@@ -39,7 +41,7 @@ class FramePairingTest(unittest.TestCase):
 
 
 class ToFPreviewTest(unittest.TestCase):
-    def test_sensor_facing_view_preserves_the_raw_frame(self):
+    def test_camera_view_preserves_the_raw_frame(self):
         distance = np.zeros((8, 8), dtype=np.int16)
         status = np.zeros((8, 8), dtype=np.uint8)
         count = np.ones((8, 8), dtype=np.uint8)
@@ -48,8 +50,8 @@ class ToFPreviewTest(unittest.TestCase):
         distance[4, 5], status[4, 5] = 650, 1
         frame = ToFFrame(distance, status, count, timestamp_ns=1, streamcount=0)
         tof = ToFPreview("/dev/i2c-7")
-        tof.frame = frame
-        with patch("cane_live.time.monotonic_ns", return_value=2):
+        tof.frames.append(frame)
+        with patch("live_preview.time.monotonic_ns", return_value=2):
             preview = LivePreview(tof).status()
         self.assertIsNone(preview["sequence"])
         self.assertEqual(preview["tof"]["distances_mm"][0][0], 400)
@@ -63,9 +65,47 @@ class ToFPreviewTest(unittest.TestCase):
     def test_stale_frames_are_hidden(self):
         tof = ToFPreview("/dev/i2c-7")
         self.assertEqual(tof.status(), {"state": "waiting"})
-        tof.frame = Mock(timestamp_ns=0)
-        with patch("cane_live.time.monotonic_ns", return_value=1_000_000_001):
+        tof.frames.append(Mock(timestamp_ns=0))
+        with patch("live_preview.time.monotonic_ns", return_value=1_000_000_001):
             self.assertEqual(tof.status(), {"state": "stale"})
+
+    def test_uses_nearest_tof_frame_within_camera_time_window(self):
+        tof = ToFPreview("/dev/i2c-7")
+        nearest = Mock(timestamp_ns=100_000_000)
+        latest = Mock(timestamp_ns=300_000_000)
+        tof.frames.extend((nearest, latest))
+        self.assertIs(tof.frame_at(170_000_000), nearest)
+        self.assertIsNone(tof.frame_at(500_000_000))
+
+    def test_projects_raw_corners_with_positive_camera_x_offset(self):
+        distance = np.full((8, 8), 1000, dtype=np.int16)
+        status = np.zeros((8, 8), dtype=np.uint8)
+        count = np.ones((8, 8), dtype=np.uint8)
+        status[7, 7], status[0, 0] = 5, 6
+        frame = ToFFrame(distance, status, count, timestamp_ns=1, streamcount=0)
+        matrix = np.array([[400.0, 0, 320], [0, 400.0, 176], [0, 0, 1]])
+        pixels, depths, tentative = project_tof(frame, matrix, np.zeros(5))
+        centers = pixels[:, 0]
+        np.testing.assert_array_equal(depths, [1000, 1000])
+        np.testing.assert_array_equal(tentative, [False, True])
+        np.testing.assert_allclose(centers.mean(axis=0), [334, 176])
+        self.assertTrue((centers[0] < (320, 176)).all())
+        self.assertTrue((centers[1] > (320, 176)).all())
+        np.testing.assert_allclose(pixels[:, 1:].mean(axis=1), centers)
+
+    def test_outline_shifts_with_depth_for_parallel_sensor_axes(self):
+        status = np.zeros((8, 8), dtype=np.uint8)
+        status[3, 4] = 5
+        count = np.ones((8, 8), dtype=np.uint8)
+        matrix = np.array([[400.0, 0, 320], [0, 400.0, 176], [0, 0, 1]])
+        outlines = []
+        for mm in (200, 400):
+            depth = np.full((8, 8), mm, dtype=np.int16)
+            frame = ToFFrame(depth, status, count, timestamp_ns=0, streamcount=0)
+            pixels, _, _ = project_tof(frame, matrix, np.zeros(5))
+            outlines.append(pixels[0, 1:])
+        displacement = outlines[0] - outlines[1]
+        np.testing.assert_allclose(displacement, [[35.0, 0.0]] * 4)
 
 
 class LiveProjectionTest(unittest.TestCase):

@@ -5,10 +5,8 @@ import csv
 import math
 import sys
 import time
-from collections import deque
 from contextlib import ExitStack
 from pathlib import Path
-from threading import Event, Lock, Thread
 
 import cv2
 import numpy as np
@@ -16,8 +14,8 @@ from calibration_common import IMAGE_SIZE
 from calibration_web import preview_server
 from camera_imu_geometry import EXTRINSICS_PATH, INTRINSICS_PATH, load_intrinsics
 from cubie_io import DEVICE, CameraFrames, add_imu_args, imu_stream
+from live_preview import LivePreview, ToFPreview
 
-from smartcane.sensors.vl53l8cx import VL53L8CX
 from smartcane.vision.bev import (
     GRID_CELL_M,
     GRID_FAR_M,
@@ -107,87 +105,6 @@ def bev_panel(grid, lookup, resized, labels, real_image):
     return panel
 
 
-class ToFPreview:
-    """Read ToF independently of the frame processing and preview requests."""
-
-    def __init__(self, bus):
-        self.bus = bus
-        self.lock = Lock()
-        self.stopped = Event()
-        self.thread = Thread(target=self.read, daemon=True)
-        self.frame = None
-        self.error = None
-
-    def __enter__(self):
-        self.thread.start()
-        return self
-
-    def __exit__(self, *exc):
-        self.stopped.set()
-        self.thread.join()
-
-    def read(self):
-        try:
-            with VL53L8CX(bus=self.bus) as sensor:
-                sensor.start()
-                while not self.stopped.is_set():
-                    frame = sensor.read_frame(timeout_ms=250)
-                    if frame is not None:
-                        with self.lock:
-                            self.frame = frame
-        except (OSError, RuntimeError, ValueError) as exc:
-            with self.lock:
-                self.error = str(exc)
-
-    def status(self):
-        with self.lock:
-            frame, error = self.frame, self.error
-        if error is not None:
-            return {"state": "error", "message": error}
-        if frame is None:
-            return {"state": "waiting"}
-        if time.monotonic_ns() - frame.timestamp_ns > 1_000_000_000:
-            return {"state": "stale"}
-        tentative = frame.tentative_mask
-        distances = np.where(frame.valid_mask | tentative, frame.distance_mm, None)
-        # The display faces the sensor on the mounted cane.
-        return {
-            "state": "ready",
-            "distances_mm": distances[::-1, ::-1].tolist(),
-            "tentative": tentative[::-1, ::-1].tolist(),
-        }
-
-
-class LivePreview:
-    def __init__(self, tof=None):
-        self.tof = tof
-        self.frames = deque(maxlen=4)
-        self.lock = Lock()
-
-    def publish(self, sequence, image, row):
-        ok, encoded = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 65])
-        if not ok:
-            raise RuntimeError("Could not encode live preview")
-        with self.lock:
-            self.frames.append((sequence, encoded.tobytes(), row))
-
-    def status(self):
-        with self.lock:
-            status = {"sequence": None}
-            if self.frames:
-                sequence, _, row = self.frames[-1]
-                status = dict(row, sequence=sequence)
-        if self.tof is not None:
-            status["tof"] = self.tof.status()
-        return status
-
-    def jpeg(self, sequence):
-        with self.lock:
-            return next(
-                (jpeg for number, jpeg, _ in self.frames if number == sequence), None
-            )
-
-
 def print_frame(number, row):
     line = (
         f"{number:05d} | infer {row['infer_ms']:.0f} ms | "
@@ -245,7 +162,7 @@ def main(backend):
         action="store_true",
         help="display projected RGB for checking floor marks",
     )
-    parser.add_argument("--tof", action="store_true", help="show ToF in the preview")
+    parser.add_argument("--tof", action="store_true", help="show the ToF grid")
     parser.add_argument("--tof-bus", default="/dev/i2c-7", help="ToF I2C device")
     parser.add_argument("--log", type=Path, help="write metrics to this new CSV file")
     add_imu_args(parser)
