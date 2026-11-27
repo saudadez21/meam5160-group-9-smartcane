@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 import numpy as np
 from cane_live import process_frame
 from live_preview import LivePreview, ToFPreview
+from preview_tof_ground import grid_background, render_ground_points
 
 from smartcane.sensors.bno085 import (
     FrameOrientation,
@@ -15,7 +16,7 @@ from smartcane.sensors.bno085 import (
 from smartcane.sensors.vl53l8cx import ToFFrame
 from smartcane.vision.bev import UNKNOWN, GroundGrid, GroundPose, MountCalibration
 from smartcane.vision.segmentation_common import MODEL_SIZE, preprocess
-from smartcane.vision.tof_projection import project_tof
+from smartcane.vision.tof_projection import project_tof, tof_ground_points
 
 
 class FramePairingTest(unittest.TestCase):
@@ -106,6 +107,44 @@ class ToFPreviewTest(unittest.TestCase):
             outlines.append(pixels[0, 1:])
         displacement = outlines[0] - outlines[1]
         np.testing.assert_allclose(displacement, [[35.0, 0.0]] * 4)
+
+    def test_ground_coordinates_keep_signed_height(self):
+        distances = np.full((8, 8), 1000, dtype=np.int16)
+        status = np.zeros((8, 8), dtype=np.uint8)
+        status[3, 3] = 5
+        count = np.ones((8, 8), dtype=np.uint8)
+        frame = ToFFrame(distances, status, count, timestamp_ns=0, streamcount=0)
+        camera_ground = np.array([[1.0, 0, 0], [0, 0, -1], [0, 1, 0]])
+        pose = GroundPose(camera_ground, np.array([0, 0.7, 0]), 0, 0, 0.7)
+        xyz, tentative = tof_ground_points(frame, pose)
+        ray = np.tan(np.radians(22.5)) / 8
+        np.testing.assert_allclose(xyz, [[0.035 + ray, 1.0, 0.7 - ray]])
+        np.testing.assert_array_equal(tentative, [False])
+
+    def test_ground_preview_separates_tentative_and_outside_returns(self):
+        image = grid_background()
+        points = np.array(
+            [
+                [0.0, 0.5, 0.02],
+                [0.1, 0.5, 0.16],
+                [0.2, 0.5, -0.18],
+                [0.0, 0.7, 0.2],
+                [2.0, 0.7, 0.3],
+            ]
+        )
+        tentative = np.array([False, False, False, True, False])
+        result = render_ground_points(image, points, tentative, 0.05)
+        self.assertEqual(
+            result,
+            {
+                "ground": 1,
+                "above": 1,
+                "below": 1,
+                "tentative": 1,
+                "outside": 1,
+                "reliable_heights_cm": [2.0, 16.0, -18.0],
+            },
+        )
 
 
 class LiveProjectionTest(unittest.TestCase):

@@ -58,10 +58,13 @@ class ToFPreview:
             return None
         return frame
 
-    def status(self):
+    def snapshot(self):
         with self.lock:
             frame = self.frames[-1] if self.frames else None
-            error = self.error
+            return frame, self.error
+
+    def status(self):
+        frame, error = self.snapshot()
         if error is not None:
             return {"state": "error", "message": error}
         if frame is None:

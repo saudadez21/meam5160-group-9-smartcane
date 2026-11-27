@@ -22,6 +22,10 @@ class GroundPose:
     roll_deg: float
     height_m: float
 
+    def camera_to_ground(self, points):
+        """Transform camera points into the ground grid's metric coordinates."""
+        return (points - self.translation) @ self.rotation
+
 
 @dataclass(frozen=True)
 class MountCalibration:
