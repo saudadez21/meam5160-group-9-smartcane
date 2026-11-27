@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import Mock
 
 import numpy as np
-from cane_live_cpu import process_frame
+from cane_live import process_frame
 
 from smartcane.sensors.bno085 import (
     FrameOrientation,
@@ -12,7 +12,7 @@ from smartcane.sensors.bno085 import (
     interpolate_orientation,
 )
 from smartcane.vision.bev import UNKNOWN, GroundGrid, GroundPose, MountCalibration
-from smartcane.vision.segmentation_cpu import MODEL_SIZE, preprocess
+from smartcane.vision.segmentation_common import MODEL_SIZE, preprocess
 
 
 class FramePairingTest(unittest.TestCase):

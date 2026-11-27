@@ -11,6 +11,9 @@ __pycache__/
 /calibration/camera_imu/*
 !/calibration/camera_imu/README.md
 
+# Local A733 VIPLite SDK
+/third_party/viplite/
+
 # Development tools
 .pytest_cache/
 .ruff_cache/
