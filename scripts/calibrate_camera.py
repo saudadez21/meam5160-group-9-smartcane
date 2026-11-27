@@ -20,6 +20,7 @@ from calibration_common import (
     OUTPUT_DIR,
     PATTERN_SIZE,
     SQUARE_SIZE_M,
+    checkerboard_points,
     find_corners,
 )
 
@@ -44,11 +45,7 @@ def main():
         for p in IMAGE_DIR.iterdir()
         if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES
     )
-    object_points = np.zeros((PATTERN_SIZE[0] * PATTERN_SIZE[1], 3), np.float32)
-    object_points[:, :2] = np.mgrid[0 : PATTERN_SIZE[0], 0 : PATTERN_SIZE[1]].T.reshape(
-        -1, 2
-    )
-    object_points *= SQUARE_SIZE_M
+    object_points = checkerboard_points()
     image_points = []
     view_names = []
     for path in paths:

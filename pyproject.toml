@@ -7,10 +7,23 @@ dependencies = [
     "opencv-python>=5.1.0.95",
 ]
 
+[project.optional-dependencies]
+imu = [
+    "gpiod>=2.6 ; sys_platform == 'linux'",
+    "spidev>=3.8 ; sys_platform == 'linux'",
+]
+
 [dependency-groups]
 dev = [
     "ruff>=0.17.6",
 ]
+
+[build-system]
+requires = ["uv_build>=0.13.10,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "smartcane"
 
 [tool.ruff]
 line-length = 88
