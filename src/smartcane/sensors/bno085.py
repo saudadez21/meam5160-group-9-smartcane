@@ -4,11 +4,14 @@ Samples contain a quaternion in (w, x, y, z) order and a host monotonic
 timestamp recorded after reading the SPI packet.
 """
 
+import math
 import struct
 import time
+from bisect import bisect_left
 from collections import deque
 from contextlib import ExitStack
 from dataclasses import dataclass
+from operator import attrgetter
 from threading import Condition, Event, Thread
 
 import numpy as np
@@ -17,6 +20,7 @@ PERIOD_MS = 20
 WINDOW_NS = 200_000_000
 MAX_NEAREST_NS = 60_000_000
 MAX_SPREAD_DEG = 1.0
+MAX_FRAME_GAP_NS = 3 * PERIOD_MS * 1_000_000
 
 
 def feature_packet():
@@ -81,6 +85,40 @@ class ImuMatch:
     spread_deg: float
     samples: list[ImuSample]
     nearest_ns: int
+
+
+@dataclass(frozen=True)
+class FrameOrientation:
+    quaternion: np.ndarray
+    nearest_ns: int
+    gap_ns: int
+
+
+def interpolate_orientation(samples, frame_ns):
+    """Interpolate between the host timestamps bracketing a camera frame."""
+    index = bisect_left(samples, frame_ns, key=attrgetter("host_ns"))
+    if index < len(samples) and samples[index].host_ns == frame_ns:
+        return FrameOrientation(samples[index].quaternion, 0, 0)
+    if index == 0 or index == len(samples):
+        raise ValueError("No IMU samples bracket the camera frame")
+    before, after = samples[index - 1], samples[index]
+    gap = after.host_ns - before.host_ns
+    if gap > MAX_FRAME_GAP_NS:
+        raise ValueError("IMU sample gap exceeds 60 ms")
+    elapsed = frame_ns - before.host_ns
+    ratio = elapsed / gap
+    first, last = before.quaternion, after.quaternion
+    cosine = float(first @ last)
+    if cosine < 0:
+        last, cosine = -last, -cosine
+    if cosine > 0.9995:
+        orientation = first + ratio * (last - first)
+    else:
+        angle = math.acos(cosine)
+        orientation = math.sin((1 - ratio) * angle) * first
+        orientation += math.sin(ratio * angle) * last
+    orientation /= np.linalg.norm(orientation)
+    return FrameOrientation(orientation, min(elapsed, gap - elapsed), gap)
 
 
 def match_samples(samples, frame_ns):
@@ -153,6 +191,16 @@ class Bno085Stream:
             if self.failure:
                 raise RuntimeError(f"BNO085: {self.failure}") from self.failure
             return match_samples(self.samples, frame_ns)
+
+    def orientation_at(self, frame_ns):
+        with self.changed:
+            self.changed.wait_for(
+                lambda: self.failure or self.samples[-1].host_ns >= frame_ns,
+                timeout=0.05,
+            )
+            if self.failure:
+                raise RuntimeError(f"BNO085: {self.failure}") from self.failure
+            return interpolate_orientation(self.samples, frame_ns)
 
     def read(self):
         try:

@@ -9,7 +9,7 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from threading import Condition, Event, Lock, Thread
+from threading import Lock
 
 import cv2
 import numpy as np
@@ -17,8 +17,6 @@ from calibration_common import find_corners
 from calibration_web import (
     add_web_args,
     encode_preview,
-    open_camera,
-    read_frame,
     run_web,
     validate_web_args,
 )
@@ -27,72 +25,15 @@ from camera_imu_geometry import (
     MIN_DIVERSITY,
     MIN_PAIRS,
     PAIR_DIR,
-    camera_tilt,
     load_intrinsics,
     load_pairs,
     measure_board_pose,
     pose_cell,
     pose_diversity,
-    quaternion_rotation,
 )
+from cubie_io import CameraFrames, add_imu_args, imu_stream
 
-from smartcane.sensors.bno085 import Bno085Stream
-
-
-def gpio_location(value):
-    chip, sep, offset = value.rpartition(":")
-    if not sep or not chip.startswith("/dev/gpiochip") or not offset.isdecimal():
-        raise argparse.ArgumentTypeError("Use /dev/gpiochipN:OFFSET for GPIO lines")
-    return chip, int(offset)
-
-
-class CameraFrames:
-    """Drain camera frames continuously so low-rate preview does not age the frames."""
-
-    def __init__(self, camera):
-        self.camera = camera
-        self.changed = Condition()
-        self.stopped = Event()
-        self.frame = None
-        self.failure = None
-        self.thread = Thread(target=self.read, daemon=True)
-
-    def __enter__(self):
-        self.cap = open_camera(self.camera)
-        self.thread.start()
-        return self
-
-    def __exit__(self, *exc):
-        self.stopped.set()
-        self.thread.join()
-        self.cap.release()
-
-    def read(self):
-        try:
-            while not self.stopped.is_set():
-                raw = read_frame(self.cap)
-                stamp = time.monotonic_ns()
-                with self.changed:
-                    self.frame = (stamp, raw)
-                    self.changed.notify_all()
-        except (OSError, RuntimeError, ValueError, cv2.error) as exc:
-            with self.changed:
-                self.failure = exc
-                self.changed.notify_all()
-
-    def latest(self):
-        with self.changed:
-            self.changed.wait_for(
-                lambda: self.frame is not None or self.failure, timeout=3
-            )
-            if self.failure:
-                raise RuntimeError(f"Camera: {self.failure}") from self.failure
-            if (
-                self.frame is None
-                or time.monotonic_ns() - self.frame[0] > 1_000_000_000
-            ):
-                raise RuntimeError("Camera supplied no recent frame")
-            return self.frame
+from smartcane.geometry import camera_tilt, quaternion_rotation
 
 
 @dataclass
@@ -239,10 +180,7 @@ def main():
     add_web_args(parser)
     parser.add_argument("--intrinsics", type=Path, default=INTRINSICS_PATH)
     parser.add_argument("--output", type=Path, default=PAIR_DIR)
-    parser.add_argument("--spi-device", default="/dev/spidev1.0")
-    parser.add_argument("--int-line", type=gpio_location, default="/dev/gpiochip0:312")
-    parser.add_argument("--rst-line", type=gpio_location, default="/dev/gpiochip0:313")
-    parser.add_argument("--wake-line", type=gpio_location, default="/dev/gpiochip1:5")
+    add_imu_args(parser)
     args = parser.parse_args()
     validate_web_args(parser, args)
     if sys.platform != "linux":
@@ -251,9 +189,7 @@ def main():
         intrinsics = load_intrinsics(args.intrinsics)
         with (
             CameraFrames(args.camera) as camera,
-            Bno085Stream(
-                args.spi_device, args.int_line, args.rst_line, args.wake_line
-            ) as imu,
+            imu_stream(args) as imu,
         ):
             session = JointCaptureSession(args.output, intrinsics, camera, imu)
             run_web(session, session.update, args.host, args.port, 1 / args.preview_fps)

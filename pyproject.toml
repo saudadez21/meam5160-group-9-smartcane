@@ -12,6 +12,9 @@ imu = [
     "gpiod>=2.6 ; sys_platform == 'linux'",
     "spidev>=3.8 ; sys_platform == 'linux'",
 ]
+cpu = [
+    "onnxruntime>=1.32",
+]
 
 [dependency-groups]
 dev = [

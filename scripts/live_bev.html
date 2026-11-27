@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SmartCane live BEV</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #11171d; color: #edf1f5; }
+  body { margin: 0; }
+  main { max-width: 1000px; padding: clamp(12px, 4vw, 32px); margin: auto; }
+  h1 { font-size: clamp(22px, 4vw, 32px); margin: 0 0 10px; }
+  .panels { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; color: #c3ccd6; margin-bottom: 6px; }
+  .image { aspect-ratio: 960 / 352; background: #202932; border-radius: 8px; overflow: hidden; }
+  img { display: block; width: 100%; }
+  .status { font-weight: 670; font-size: 18px; margin-bottom: 4px; }
+  p { margin-top: 12px; }
+  .muted { color: #b8c3ce; font-size: 14px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; }
+  .chip { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>SmartCane live BEV</h1>
+  <div class="panels"><span>Camera segmentation</span><span>Ground view</span></div>
+  <div class="image"><img id="preview" alt="Live segmentation and bird's-eye view"></div>
+  <p id="status" class="status">Waiting for the first frame...</p>
+  <p id="metrics" class="muted"></p>
+  <div class="legend muted">
+    <span><i class="chip" style="background:#00c800"></i>Walkable</span>
+    <span><i class="chip" style="background:#c800c8"></i>Road</span>
+    <span><i class="chip" style="background:#ff0000"></i>Obstacle</span>
+    <span><i class="chip" style="background:#323232"></i>Unknown</span>
+  </div>
+</main>
+<script>
+  const preview = document.getElementById('preview');
+  const status = document.getElementById('status');
+  const metrics = document.getElementById('metrics');
+  let sequence = null;
+  let imageURL = null;
+  const value = (number, digits) => number === null ? '-' : number.toFixed(digits);
+
+  async function refresh() {
+    try {
+      const reply = await fetch('status');
+      if (!reply.ok) throw new Error();
+      const state = await reply.json();
+      if (state.sequence !== null && state.sequence !== sequence) {
+        const image = await fetch(`preview/${state.sequence}`);
+        if (!image.ok) throw new Error();
+        const nextURL = URL.createObjectURL(await image.blob());
+        preview.src = nextURL;
+        if (imageURL) URL.revokeObjectURL(imageURL);
+        imageURL = nextURL;
+        sequence = state.sequence;
+        status.textContent = state.pose_status === 'matched' ? state.decision : `BEV unknown: ${state.pose_status}`;
+        metrics.textContent = `Pitch ${value(state.pitch_deg, 1)} deg | roll ${value(state.roll_deg, 1)} deg | ` +
+          `height ${value(state.height_m, 2)} m | IMU match ${value(state.imu_nearest_ms, 1)} ms | ` +
+          `inference ${value(state.infer_ms, 0)} ms | L/C/R ${value(state.left, 2)} / ` +
+          `${value(state.center, 2)} / ${value(state.right, 2)}`;
+      }
+    } catch {
+      sequence = null;
+      status.textContent = 'Preview interrupted. Reconnecting...';
+      metrics.textContent = '';
+    }
+    setTimeout(refresh, 1000);
+  }
+  refresh();
+</script>
+</body>
+</html>
