@@ -12,11 +12,10 @@ from calibration_common import IMAGE_DIR, IMAGE_SIZE, IMAGE_SUFFIXES, find_corne
 from calibration_web import (
     add_web_args,
     encode_preview,
-    open_camera,
-    read_frame,
     run_web,
     validate_web_args,
 )
+from cubie_io import open_camera, read_frame
 
 GRID_COLS, GRID_ROWS = 8, 5
 

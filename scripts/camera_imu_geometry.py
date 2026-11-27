@@ -16,6 +16,8 @@ from calibration_common import (
     checkerboard_points,
 )
 
+from smartcane.geometry import camera_tilt
+
 PAIR_DIR = IMAGE_DIR.parent / "camera_imu"
 INTRINSICS_PATH = OUTPUT_DIR / "camera_intrinsics.npz"
 EXTRINSICS_PATH = OUTPUT_DIR / "camera_imu.npz"
@@ -88,33 +90,11 @@ def measure_board_pose(corners, intrinsics):
     return BoardPose(up, height, rms)
 
 
-def camera_tilt(up):
-    pitch = np.degrees(np.arcsin(np.clip(-up[2], -1, 1)))
-    roll = np.degrees(np.arctan2(up[0], -up[1]))
-    return float(pitch), float(roll)
-
-
 def pose_cell(up):
     pitch, roll = camera_tilt(up)
     row = np.searchsorted([25, 40], pitch)
     col = np.searchsorted([-8, 8], roll)
     return int(3 * row + col)
-
-
-def quaternion_rotation(quaternion):
-    """Return the rotation from IMU coordinates to its world coordinates."""
-    q = np.asarray(quaternion, dtype=float)
-    norm = np.linalg.norm(q)
-    if q.shape != (4,) or not np.isfinite(norm) or norm < 1e-6:
-        raise ValueError("Invalid IMU quaternion. Expected finite w, x, y, z.")
-    w, x, y, z = q / norm
-    return np.array(
-        [
-            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
-            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
-            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
-        ]
-    )
 
 
 def load_pairs(directory, digest):

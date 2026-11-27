@@ -6,7 +6,7 @@ import socket
 import subprocess
 import sys
 import time
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -15,49 +15,9 @@ from threading import Thread
 import cv2
 import numpy as np
 from calibration_common import IMAGE_SIZE, PATTERN_SIZE
+from cubie_io import DEVICE
 
-DEVICE = 1 if sys.platform == "win32" else 0
-FPS = 25
-PIXEL_FORMAT = "MJPG"
 PREVIEW_SIZE = (640, 360)
-
-
-def open_camera(camera):
-    if isinstance(camera, str) and camera.isdecimal():
-        camera = int(camera)
-    backend = {"win32": cv2.CAP_DSHOW, "linux": cv2.CAP_V4L2}.get(
-        sys.platform, cv2.CAP_ANY
-    )
-    cap = cv2.VideoCapture(camera, backend)
-    if not cap.isOpened():
-        cap.release()
-        raise RuntimeError(f"Cannot open camera: {camera}")
-    try:
-        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*PIXEL_FORMAT))
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, IMAGE_SIZE[0])
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, IMAGE_SIZE[1])
-        cap.set(cv2.CAP_PROP_FPS, FPS)
-        if backend == cv2.CAP_V4L2:
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-        height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        print(f"Camera {camera}: {width:g}x{height:g}, FPS={fps:g}", flush=True)
-        return cap
-    except BaseException:
-        cap.release()
-        raise
-
-
-def read_frame(cap):
-    ok, frame = cap.read()
-    if not ok or frame is None:
-        raise RuntimeError("Failed to read camera frame")
-    if frame.ndim == 3 and frame.shape[2] == 2:
-        frame = cv2.cvtColor(frame, cv2.COLOR_YUV2BGR_YUY2)
-    if frame.shape != (IMAGE_SIZE[1], IMAGE_SIZE[0], 3):
-        raise ValueError(f"Unexpected camera frame: {frame.shape}")
-    return frame
 
 
 def encode_preview(raw, corners):
@@ -94,7 +54,7 @@ def validate_web_args(parser, args):
         parser.error("--port must be between 0 and 65535")
 
 
-def make_handler(session, prefix, page, interval):
+def make_handler(session, prefix, page, interval, *, allow_save=True):
     class CaptureHandler(BaseHTTPRequestHandler):
         timeout = 5
 
@@ -136,7 +96,7 @@ def make_handler(session, prefix, page, interval):
                 self.send_error(HTTPStatus.NOT_FOUND)
 
         def do_POST(self):
-            if self.path != prefix + "save":
+            if not allow_save or self.path != prefix + "save":
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
             try:
@@ -191,23 +151,30 @@ def preview_hosts(bind_address):
     return sorted(addresses)
 
 
-def run_web(session, update, host, port, interval):
+@contextmanager
+def preview_server(session, host, port, page, interval, *, allow_save=True):
     prefix = f"/{secrets.token_urlsafe(12)}/"
-    page = Path(__file__).with_name("calibration_capture.html").read_bytes()
     with ThreadingHTTPServer(
-        (host, port), make_handler(session, prefix, page, interval)
+        (host, port),
+        make_handler(session, prefix, page, interval, allow_save=allow_save),
     ) as server:
         thread = Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
-            print(f"Saving raw images to: {session.image_dir}", flush=True)
             for address in preview_hosts(host):
                 print(f"Open http://{address}:{server.server_port}{prefix}", flush=True)
-            print("Press Ctrl+C here when finished.", flush=True)
-            while True:
-                started = time.monotonic()
-                update()
-                time.sleep(max(0.0, interval - (time.monotonic() - started)))
+            yield
         finally:
             server.shutdown()
             thread.join()
+
+
+def run_web(session, update, host, port, interval):
+    page = Path(__file__).with_name("calibration_capture.html").read_bytes()
+    print(f"Saving raw images to: {session.image_dir}", flush=True)
+    with preview_server(session, host, port, page, interval):
+        print("Press Ctrl+C here when finished.", flush=True)
+        while True:
+            started = time.monotonic()
+            update()
+            time.sleep(max(0.0, interval - (time.monotonic() - started)))

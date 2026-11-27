@@ -16,8 +16,9 @@ from camera_imu_geometry import (
     load_intrinsics,
     load_pairs,
     pose_diversity,
-    quaternion_rotation,
 )
+
+from smartcane.geometry import quaternion_rotation
 
 
 def fit_rotation(up_camera, up_imu):

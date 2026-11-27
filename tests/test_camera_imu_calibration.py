@@ -7,8 +7,9 @@ import cv2
 import numpy as np
 from calibrate_camera_imu import fit_extrinsics
 from calibration_common import checkerboard_points
-from camera_imu_geometry import Intrinsics, measure_board_pose, quaternion_rotation
+from camera_imu_geometry import Intrinsics, measure_board_pose
 
+from smartcane.geometry import quaternion_rotation
 from smartcane.sensors.bno085 import (
     ImuSample,
     decode_packet,

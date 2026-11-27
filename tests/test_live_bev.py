@@ -1,0 +1,128 @@
+"""Check live frame pairing and the camera-relative ground projection."""
+
+import unittest
+from unittest.mock import Mock
+
+import numpy as np
+from cane_live_cpu import process_frame
+
+from smartcane.sensors.bno085 import (
+    FrameOrientation,
+    ImuSample,
+    interpolate_orientation,
+)
+from smartcane.vision.bev import UNKNOWN, GroundGrid, GroundPose, MountCalibration
+from smartcane.vision.segmentation_cpu import MODEL_SIZE, preprocess
+
+
+class FramePairingTest(unittest.TestCase):
+    def test_interpolates_short_arc_at_frame_time(self):
+        identity = np.array([1.0, 0, 0, 0])
+        angle = np.radians(30)
+        rotated = np.array([np.cos(angle), np.sin(angle), 0, 0])
+        samples = [ImuSample(0, identity, 3), ImuSample(20_000_000, -rotated, 3)]
+        match = interpolate_orientation(samples, 5_000_000)
+        np.testing.assert_allclose(
+            match.quaternion, [np.cos(angle / 4), np.sin(angle / 4), 0, 0]
+        )
+        self.assertEqual(match.nearest_ns, 5_000_000)
+        self.assertEqual(match.gap_ns, 20_000_000)
+
+    def test_rejects_extrapolation_and_long_gaps(self):
+        q = np.array([1.0, 0, 0, 0])
+        samples = [ImuSample(0, q, 3), ImuSample(80_000_000, q, 3)]
+        with self.assertRaisesRegex(ValueError, "bracket"):
+            interpolate_orientation(samples, 90_000_000)
+        with self.assertRaisesRegex(ValueError, "gap"):
+            interpolate_orientation(samples, 40_000_000)
+
+
+class LiveProjectionTest(unittest.TestCase):
+    def setUp(self):
+        pitch = np.radians(35)
+        s, c = np.sin(pitch), np.cos(pitch)
+        camera_to_imu = np.array([[1.0, 0, 0], [0, -s, c], [0, -c, -s]])
+        self.mount = MountCalibration(camera_to_imu, np.array([0.4, 0, 0.65]))
+        self.matrix = np.array([[700.0, 0, 640], [0, 700, 360], [0, 0, 1]])
+        self.grid = GroundGrid(self.matrix, np.zeros(5), (1280, 720))
+        self.q = np.array([1.0, 0, 0, 0])
+
+    def test_height_and_pitch_from_mount_and_quaternion(self):
+        pose = self.mount.ground_pose(self.q)
+        self.assertAlmostEqual(pose.height_m, 0.65)
+        self.assertAlmostEqual(pose.pitch_deg, 35)
+        self.assertAlmostEqual(pose.roll_deg, 0)
+        lookup = self.grid.lookup(pose, MODEL_SIZE)
+        labels = np.zeros(MODEL_SIZE[::-1], dtype=np.uint8)
+        projected = lookup.sample(labels, UNKNOWN)
+        self.assertTrue(np.any(projected == 0))
+        self.assertTrue(np.any(projected == UNKNOWN))
+        self.assertTrue(np.all(lookup.x < MODEL_SIZE[0]))
+        self.assertTrue(np.all(lookup.y < MODEL_SIZE[1]))
+
+    def test_camera_roll_rotates_the_ground_axes(self):
+        radians = np.radians(10)
+        q = np.array([np.cos(radians), 0, np.sin(radians), 0])
+        pose = self.mount.ground_pose(q)
+        up_imu = np.array([-np.sin(2 * radians), 0, np.cos(2 * radians)])
+        np.testing.assert_allclose(
+            pose.rotation[:, 2], self.mount.camera_to_imu.T @ up_imu
+        )
+        self.assertAlmostEqual(
+            pose.height_m, float(up_imu @ self.mount.tip_to_camera_imu_m)
+        )
+        self.assertNotAlmostEqual(pose.roll_deg, 0)
+
+    def test_frame_pose_is_chosen_before_inference(self):
+        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+        imu, segmenter = Mock(), Mock()
+        imu.orientation_at.return_value = FrameOrientation(
+            self.q, 5_000_000, 20_000_000
+        )
+
+        def predict(raw):
+            imu.orientation_at.assert_called_once_with(123)
+            return raw[:352, :640], np.zeros(MODEL_SIZE[::-1], dtype=np.uint8)
+
+        segmenter.predict.side_effect = predict
+        row, _, _, _ = process_frame(
+            123, frame, imu, self.mount, segmenter, self.grid, 0.5
+        )
+        self.assertEqual(row["decision"], "go straight")
+        self.assertEqual(row["imu_nearest_ms"], 5)
+        imu.orientation_at.side_effect = ValueError("No samples")
+        segmenter.predict.side_effect = lambda raw: (
+            raw[:352, :640],
+            np.zeros(MODEL_SIZE[::-1], dtype=np.uint8),
+        )
+        row, _, _, lookup = process_frame(
+            456, frame, imu, self.mount, segmenter, self.grid, 0.5
+        )
+        self.assertIsNone(lookup)
+        self.assertEqual(row["decision"], "unknown")
+
+    def test_preprocess_uses_rgb_and_training_normalization(self):
+        image = np.full((720, 1280, 3), [255, 0, 0], dtype=np.uint8)
+        _, tensor = preprocess(image)
+        self.assertEqual(tensor.shape, (1, 3, 352, 640))
+        np.testing.assert_array_equal(tensor[0, :, 0, 0], [-1, -1, 1])
+
+    def test_upward_camera_reports_pose_but_skips_ground_projection(self):
+        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+        imu, mount, segmenter = Mock(), Mock(), Mock()
+        imu.orientation_at.return_value = FrameOrientation(self.q, 0, 0)
+        mount.ground_pose.return_value = GroundPose(np.eye(3), np.zeros(3), -28, 0, 0.1)
+        segmenter.predict.return_value = (
+            frame[:352, :640],
+            np.zeros(MODEL_SIZE[::-1], dtype=np.uint8),
+        )
+        row, _, _, lookup = process_frame(
+            123, frame, imu, mount, segmenter, self.grid, 0.5
+        )
+        self.assertEqual(row["pitch_deg"], -28)
+        self.assertEqual(row["decision"], "unknown")
+        self.assertIsNone(lookup)
+
+
+if __name__ == "__main__":
+    unittest.main()
