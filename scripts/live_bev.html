@@ -18,6 +18,17 @@
   .muted { color: #b8c3ce; font-size: 14px; }
   .legend { display: flex; flex-wrap: wrap; gap: 14px; }
   .chip { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; }
+  .tof { margin-top: 24px; }
+  .tof h2 { font-size: 19px; margin: 0 0 4px; }
+  .tof p { margin: 0 0 8px; }
+  .tof-grid { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 4px; max-width: 440px; }
+  .tof-cell {
+    display: grid; place-items: center; min-height: clamp(25px, 6vw, 38px);
+    border-radius: 4px; background: #202932; color: #aeb9c4;
+    font-size: clamp(10px, 2.8vw, 14px); font-variant-numeric: tabular-nums;
+  }
+  .tof-cell.valid { background: #193b3d; color: #ccebea; }
+  .tof-cell.tentative { background: #4a361e; color: #ffe0a1; }
 </style>
 </head>
 <body>
@@ -33,20 +44,58 @@
     <span><i class="chip" style="background:#ff0000"></i>Obstacle</span>
     <span><i class="chip" style="background:#323232"></i>Unknown</span>
   </div>
+  <section id="tof-panel" class="tof" hidden>
+    <h2>ToF distances</h2>
+    <p class="muted">View from in front of the cane, facing the sensor.</p>
+    <p id="tof-status" class="muted"></p>
+    <div id="tof-grid" class="tof-grid" role="group" aria-label="8 by 8 distance grid"></div>
+  </section>
 </main>
 <script>
   const preview = document.getElementById('preview');
   const status = document.getElementById('status');
   const metrics = document.getElementById('metrics');
+  const tofPanel = document.getElementById('tof-panel');
+  const tofStatus = document.getElementById('tof-status');
+  const tofCells = Array.from({length: 64}, () => {
+    const cell = document.createElement('span');
+    cell.className = 'tof-cell';
+    return cell;
+  });
+  document.getElementById('tof-grid').append(...tofCells);
   let sequence = null;
   let imageURL = null;
   const value = (number, digits) => number === null ? '-' : number.toFixed(digits);
 
+  function renderToF(sample) {
+    tofPanel.hidden = !sample;
+    if (!sample) return;
+    const ready = sample.state === 'ready';
+    const messages = {
+      waiting: 'Waiting for ToF data...',
+      stale: 'No recent ToF data.',
+      disconnected: 'ToF preview interrupted.',
+      error: `ToF unavailable. ${sample.message}`,
+    };
+    tofStatus.textContent = ready ? 'Millimeters  |  ? Tentative  |  -- Unknown' : messages[sample.state];
+    tofCells.forEach((cell, index) => {
+      const row = Math.floor(index / 8);
+      const column = index % 8;
+      const distance = ready ? sample.distances_mm[row][column] : null;
+      const tentative = distance !== null && sample.tentative[row][column];
+      cell.textContent = distance === null ? '--' : `${distance}${tentative ? '?' : ''}`;
+      cell.classList.toggle('valid', distance !== null && !tentative);
+      cell.classList.toggle('tentative', tentative);
+    });
+  }
+
   async function refresh() {
+    let state;
     try {
       const reply = await fetch('status');
       if (!reply.ok) throw new Error();
-      const state = await reply.json();
+      state = await reply.json();
+      renderToF(state.tof);
       if (state.sequence !== null && state.sequence !== sequence) {
         const image = await fetch(`preview/${state.sequence}`);
         if (!image.ok) throw new Error();
@@ -65,6 +114,7 @@
       sequence = null;
       status.textContent = 'Preview interrupted. Reconnecting...';
       metrics.textContent = '';
+      if (!state && !tofPanel.hidden) renderToF({state: 'disconnected'});
     }
     setTimeout(refresh, 1000);
   }
